@@ -1,6 +1,8 @@
-import sys, os, sqlite3, shutil, time
+import sys, os, sqlite3, shutil, time, shlex
 from enum  import Enum
 from pyuac import main_requires_admin
+
+Debug = False # Allow dev Debug functions.
 
 """ Some standard strings. Move to some dedicated Enum later """
 _root_Path,_    = os.path.split(sys.argv[0])
@@ -10,28 +12,36 @@ _Save_Template  = "Profiles\\{}\\{}"
 
 class __msg(Enum):
     """ Enum for all messages to display to the user. """
-    migrate         = "Migrate old data? ['Y'es/'N'o]";                     symFound        = "{}: Simlink found."
+    migrate         = "Migrate old data? ['Y'es/'N'o] ";                    symFound        = "{}: Simlink found."
     folderNotFound  = "{}: Folder not found. No copy performed";            copyPass        = "{}: Standard folder found. Files Copied."
-    deleteAnyway    = "{}: Delete standard folder anyway? ['Y'es/'N'o]";    symPass         = "{}: Symlink not found. Linked save profile folder"
-    symFail         = "{}: Error linking profile\n\t{}";                    symFinishWErrors= "Simlinks finished with errors:\n{}";
-    symFinishPass   = "Simlinks created successfully";                      folderExists    = "{}: Error copying pre-existing saves. Folder may already exist.\n\t{})"
+    deleteAnyway    = "{}: Delete standard folder anyway? ['Y'es/'N'o] ";   symPass         = "{}: Symlink not found. Linked save profile folder"
+    symFail         = "{}: Error linking profile\n\n\t{}";                  symFinishWErrors= "Simlinks finished with errors:\n\n\t{}";
+    unsymFail       = "Error: failed to unlink. Run as admin.\n\n{}";       addFail         = "Error: Adding game failed\n\n{}"
+    symFinishPass   = "Simlinks created successfully";                      folderExists    = "{}: Error copying pre-existing saves. Folder may already exist.\n\n\t{})"
     msgExit         = "Press enter to exit...";                             unkn            = "Error: Unknown Error"
-    missingArgs     = "Error: Missing arguments.";                          addArgs         = "Error: Missing arguments for adding new game."
-    activeProfile   = "The currently active profile is: {}";                promptSwap      = "Swap Profile? ('Y'es/'N'o)"
+    missingArgs     = "Error: Missing arguments. Use '/help' for help";     addArgs         = "Error: Missing arguments for adding new game/profile."
+    activeProfile   = "The currently active profile is: {}";                promptSwap      = "Swap Profile? ('Y'es/'N'o) "
+    debugArgs       = "Please type debug args: \n> ";                       profileMissing  = "Error: Profile missing.\n Create new profile? ['Y'es/'N'o] "
+    abort           = "Abort detected. Stopping process..."
+    idleIDE         = "'Idle IDE' detected. Entering Dev mode.\nSome features WILL NOT work.\nThis is by design. Restart in normal window."
     help            = """
     AutoProfileSwapper - Switches save profiles for games
     
     Usage:
-      autoProfileSwapper.py [/a] [GameID] [SaveDir]
-      autoProfileSwapper.py [/h] [ProfileID]
+      autoProfileSwapper.py /add-game GameID SaveDir
+      autoProfileSwapper.py /add-prof ProfileID
+      autoProfileSwapper.py [/h] ProfileID
       autoProfileSwapper.py /help
       
       /help ----- Displays this help message.
-      /a -------- Add a new game to the config file.
-                      Requires GameID, SaveDir
-      /h -------- Optional. Headless mode. Automatically switch profiles without user interaction.
+      /add-game - Add a new game to manage.
+                      Requires GameID and SaveDir
+      /add-prof - Add a new profile to manage.
+                      Requires a ProfileID
+      /h -------- Optional. Headless mode. Automatically switch profile.
+                      Requires a ProfileID
       ProfileID - Name of profile to swap to. Will prompt user before swapping.
-      GameID ---- Required with /a. Adds new one with \a.
+      GameID ---- Required with /a. Adds new one with /a.
       SaveDir --- Required with /a. Directory for game save folder."""
 
 class __query(Enum):
@@ -70,8 +80,8 @@ def disableProfiles():          executeDBQuery( util_str(__query.disable,  __que
 
 def migrateData():
     """ Migrate old config.ini to new SQLite3 DB file. """
+    if not util_path(_old_ini_file,True):         return
     if input(__msg.migrate.value).lower() != 'y': return
-    if not util_path(_old_ini_file,True):                   return
     # Initialize configuration parser
     import configparser
     config = configparser.ConfigParser(allow_no_value=True, delimiters=('='))
@@ -81,6 +91,7 @@ def migrateData():
     for ID in config.sections():
         Dir,Fldr = config.items(ID)
         addGame(ID,os.path.join(Dir[1].strip('";'),Fldr[1].strip('";')))
+    os.rename(util_path(_old_ini_file), util_path(_old_ini_file) + ".Old")
         
 def init_folders():
     """ Prep Profiles folder """
@@ -93,19 +104,20 @@ def initialize():
     """ First-run steps """
     init_db()
     migrateData()
-    addProfile("Test1");# enableProfile("Test1"); # debug
-    addProfile("Test2"); addProfile("Test3")     # debug
-    if getActiveProfile() == None: addProfile("Test1"); enableProfile("Test1")
+    if getActiveProfile() == None: addProfile("Default"); enableProfile("Default")
     init_folders()
 
 def copy_save_to_profile(Path, ActiveProfile, ID, Errors):
     try:
         shutil.copytree(util_path(Path), util_path(_Save_Template.format(ActiveProfile,ID)))
-        shutil.rmtree(util_path(Path))
+        if     Debug: os.rename(util_path(Path), util_path(Path) + "_BACKUP")
+        if not Debug: shutil.rmtree(util_path(Path))
         print(__msg.copyPass.value.format(ID))
     except Exception as e:
         print(__msg.folderExists.value.format(ID,e))
-        if input(__msg.deleteAnyway.value.format(ID)).lower() == "y": shutil.rmtree(util_path(Path))
+        if input(__msg.deleteAnyway.value.format(ID)).lower() == "y":
+            if     Debug: os.rename(util_path(Path), util_path(Path) + "_BACKUP")
+            if not Debug: shutil.rmtree(util_path(Path))
         Errors.append(ID)
     return Errors
 
@@ -118,8 +130,7 @@ def create_symlink(Path, ActiveProfile, ID, Errors):
     except Exception as e: print(__msg.symFail.value.format(ID,e)); Errors.append(ID)
     return Errors
 
-def make_all_symlinks():
-    """ Still under works. Refactoring required. Move strings to dedicated Enum later. """
+def add_all_symlinks():
     ListGames       = getAllGames()
     ActiveProfile,_ = getActiveProfile()
     Errors          = []
@@ -131,44 +142,60 @@ def make_all_symlinks():
         if not os.path.exists(util_path(Path)): Errors = create_symlink(Path, ActiveProfile, ID, Errors)
     print(__msg.symFinishWErrors.value.format(Errors) if len(Errors) else __msg.symFinishPass.value)
 
-def remove_symlinks():
+def del_all_symlinks():
     ListGames   = getAllGames()
     Errors      = []
     for ID,Path,_ in ListGames:
         try: os.unlink(Path)
-        except Exception as e: print(f"failed to unlink\n{e}")
+        except Exception as e: print(util_str(__msg.unsymFail, e))
         continue;
     
 def swapProfiles(Profile, Headless = False):
+    if Profile.lower() not in [p[0].lower() for p in getAllProfiles()]:
+        Choice = input(util_str(__msg.profileMissing, Profile)).lower() == 'y'
+        if     Choice: addProfile(Profile)
+        if not Choice: util_bugOut(__msg.abort)
     if not Headless:
-        choice = input(util_str(__msg.promptSwap)).strip().lower()
-        if choice != 'y': util_bugOut(__msg.activeProfile, getActiveProfile()[0])
+        Choice = input(util_str(__msg.promptSwap)).lower() == 'Y'
+        if Choice: util_bugOut(__msg.activeProfile, getActiveProfile()[0])
+    init_folders()
     disableProfiles()
     enableProfile(Profile)
-    remove_symlinks()
-    make_all_symlinks()
+    del_all_symlinks()
+    add_all_symlinks()
     if Headless: util_bugOut(__msg.activeProfile, getActiveProfile()[0])
 
+def add_new_game(ID,Dir,Comment = None):
+    try: addGame(ID,Dir,Comment)
+    except Exception as e: print(util_str(__msg.addFail, e))
+    finally: add_all_symlinks()
+    
+
 def parseArgs():
+    print(sys.argv)
+    if Debug: sys.argv.extend(shlex.split(input(util_str(__msg.debugArgs)))) # Parse debug args.
     if len(sys.argv) < 2: util_bugOut(__msg.missingArgs)
     print(util_str(__msg.activeProfile, getActiveProfile()[0]))
     mode = sys.argv[1]
     match(mode):
         case "/help": util_bugOut(__msg.help)
-        case "/a":
+        case "/add-game":
             if len(sys.argv) != 4: util_bugOut(__msg.addArgs)
             game_id = sys.argv[2]
             save_dir = sys.argv[3]
             add_new_game(game_id, save_dir)
+        case "/add-prof":
+            if len(sys.argv) != 3: util_bugOut(__msg.addArgs)
+            addProfile(sys.argv[2])
+            swapProfiles(sys.argv[2])
         case "/h":
-            if len(sys.argv) < 3: util_bugOut(__msg.missingArgs)
+            if len(sys.argv) != 3: util_bugOut(__msg.missingArgs)
             profile = sys.argv[2]
             swapProfiles(profile, True)
         case _:
-            if len(sys.argv) < 2: util_bugOut(__msg.missingArgs)
+            if len(sys.argv) != 2: util_bugOut(__msg.missingArgs)
             profile = sys.argv[1]
             swapProfiles(profile)
-            input(util_str(__msg.activeProfile, getActiveProfile()[0]))
             pass
 
 def __main__():
@@ -179,12 +206,15 @@ def __main__():
     pip install win32security
     """
     initialize() # First-run setup
-    # make_all_symlinks()
+    # add_all_symlinks()
     parseArgs()
     input(__msg.msgExit.value)
 
 if __name__ == "__main__":
     # Idle IDE should autorun with *some* permissions. Will fail creating symlink.
-    if not 'idlelib.run' in sys.modules:
-        __main__ = main_requires_admin(__main__)
+    if 'idlelib.run' in sys.modules:
+        input(util_str(__msg.idleIDE))
+        Debug = True
+    else: __main__ = main_requires_admin(__main__)
     __main__()
+    
