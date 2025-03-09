@@ -4,6 +4,14 @@ from pyuac import main_requires_admin
 
 Debug = False # Allow dev Debug functions.
 
+""" Changelog v 1.01 """
+"""
+    - Removed print(sys.argv) from parseArgs().
+    - Bugfix: Don't swap profiles when the user says not to...
+        - I'm sorry Kitt, I can't let you do that.
+    - Removed extra space from missing profile error message.
+"""
+
 """ Some standard strings. Move to some dedicated Enum later """
 _root_Path,_    = os.path.split(sys.argv[0])
 _DB_FILE        = "config.db"
@@ -21,7 +29,7 @@ class __msg(Enum):
     msgExit         = "Press enter to exit...";                             unkn            = "Error: Unknown Error"
     missingArgs     = "Error: Missing arguments. Use '/help' for help";     addArgs         = "Error: Missing arguments for adding new game/profile."
     activeProfile   = "The currently active profile is: {}";                promptSwap      = "Swap Profile? ('Y'es/'N'o) "
-    debugArgs       = "Please type debug args: \n> ";                       profileMissing  = "Error: Profile missing.\n Create new profile? ['Y'es/'N'o] "
+    debugArgs       = "Please type debug args: \n> ";                       profileMissing  = "Error: Profile missing.\nCreate new profile? ['Y'es/'N'o] "
     abort           = "Abort detected. Stopping process..."
     idleIDE         = "'Idle IDE' detected. Entering Dev mode.\nSome features WILL NOT work.\nThis is by design. Restart in normal window."
     help            = """
@@ -153,11 +161,11 @@ def del_all_symlinks():
 def swapProfiles(Profile, Headless = False):
     if Profile.lower() not in [p[0].lower() for p in getAllProfiles()]:
         Choice = input(util_str(__msg.profileMissing, Profile)).lower() == 'y'
-        if     Choice: addProfile(Profile)
+        if     Choice: addProfile(Profile);
         if not Choice: util_bugOut(__msg.abort)
     if not Headless:
-        Choice = input(util_str(__msg.promptSwap)).lower() == 'Y'
-        if Choice: util_bugOut(__msg.activeProfile, getActiveProfile()[0])
+        Choice = input(util_str(__msg.promptSwap)).lower() == 'y'
+        if not Choice: util_bugOut(__msg.activeProfile, getActiveProfile()[0])
     init_folders()
     disableProfiles()
     enableProfile(Profile)
@@ -172,7 +180,6 @@ def add_new_game(ID,Dir,Comment = None):
     
 
 def parseArgs():
-    print(sys.argv)
     if Debug: sys.argv.extend(shlex.split(input(util_str(__msg.debugArgs)))) # Parse debug args.
     if len(sys.argv) < 2: util_bugOut(__msg.missingArgs)
     print(util_str(__msg.activeProfile, getActiveProfile()[0]))
@@ -201,12 +208,11 @@ def parseArgs():
 def __main__():
     # Required libraries. Needs UAC for symlink.
     """
-    pip install pyuac
-    pip install pypiwin32
-    pip install win32security
+        pip install pyuac
+        pip install pypiwin32
+        pip install win32security
     """
     initialize() # First-run setup
-    # add_all_symlinks()
     parseArgs()
     input(__msg.msgExit.value)
 
