@@ -1,11 +1,20 @@
-import sys, os, sqlite3, shutil, time, shlex
-from enum  import Enum
-from pyuac import main_requires_admin
+try:
+    import sys, os, sqlite3, shutil, time, shlex
+    from enum  import Enum
+    from pyuac import main_requires_admin
+except ModuleNotFoundError as e:
+    input(f"Could not import required library.\nPlease use 'pip install {e.name}' to install the required library..."); sys.exit()
 
-Debug = False # Allow dev Debug functions.
-
-""" Changelog v 1.01 """
 """
+Changelog v 1.02
+    - Restart program in debug mode after a bugout.
+        - Allows the user to try again, by typing in their own args.
+    - Added clarity to IDLE IDE message to tell user that they can hit enter to continue.
+    - Added Try/Except for importing libraries and an error message to help installing them.
+    - Removed some infinite looping.
+        - Let's actually close the program when done...
+
+Changelog v 1.01
     - Removed print(sys.argv) from parseArgs().
     - Bugfix: Don't swap profiles when the user says not to...
         - I'm sorry Kitt, I can't let you do that.
@@ -13,10 +22,13 @@ Debug = False # Allow dev Debug functions.
 """
 
 """ Some standard strings. Move to some dedicated Enum later """
-_root_Path,_    = os.path.split(sys.argv[0])
-_DB_FILE        = "config.db"
-_old_ini_file   = "AutoProfileSwapper.ini"
-_Save_Template  = "Profiles\\{}\\{}"
+class __globals(Enum):
+    global Debug,_root_Path,_DB_FILE,_old_ini_file,_Save_Template
+    Debug           = False # Allow dev Debug functions.
+    _root_Path,_    = os.path.split(sys.argv[0])
+    _DB_FILE        = "config.db"
+    _old_ini_file   = "AutoProfileSwapper.ini"
+    _Save_Template  = "Profiles\\{}\\{}"
 
 class __msg(Enum):
     """ Enum for all messages to display to the user. """
@@ -31,7 +43,7 @@ class __msg(Enum):
     activeProfile   = "The currently active profile is: {}";                promptSwap      = "Swap Profile? ('Y'es/'N'o) "
     debugArgs       = "Please type debug args: \n> ";                       profileMissing  = "Error: Profile missing.\nCreate new profile? ['Y'es/'N'o] "
     abort           = "Abort detected. Stopping process..."
-    idleIDE         = "'Idle IDE' detected. Entering Dev mode.\nSome features WILL NOT work.\nThis is by design. Restart in normal window."
+    idleIDE         = "'Idle IDE' detected. Entering Dev mode.\nSome features WILL NOT work.\nThis is by design. Restart in normal window. Press Enter to continue..."
     help            = """
     AutoProfileSwapper - Switches save profiles for games
     
@@ -50,7 +62,14 @@ class __msg(Enum):
                       Requires a ProfileID
       ProfileID - Name of profile to swap to. Will prompt user before swapping.
       GameID ---- Required with /a. Adds new one with /a.
-      SaveDir --- Required with /a. Directory for game save folder."""
+      SaveDir --- Required with /a. Directory for game save folder.
+
+    Some libraries need instaled for first use.
+      Please make sure the following libraries are installed with
+      'pip install ...':
+        pyuac
+        pypiwin32
+        win32security"""
 
 class __query(Enum):
     """ Enum for all strings related to accessing the SQLite3 DB """
@@ -65,7 +84,12 @@ class __query(Enum):
 
 """ Utility functions cuz lazy """
 def util_path(path, test: bool = False): return os.path.exists(os.path.expandvars(path)) if test else os.path.expandvars(path)
-def util_bugOut(s=__msg.unkn, *args): print(util_str(s,*args)); time.sleep(5); sys.exit()
+def util_bugOut(s=__msg.unkn, *args, Exit=False):
+    print(util_str(s,*args)); time.sleep(5);
+    if (Exit): sys.exit()
+    global Debug; Debug = True;
+    sys.argv = [sys.argv[0]]
+    __main__()
 def util_str(s=__msg.unkn, *args): return s.value.format(*args)
 
 """ Helper functions to ease accessing SQLite3 DB """
@@ -83,7 +107,7 @@ def deleteProfile(Profile):     executeDBQuery( util_str(__query.delete , *__que
 def getAllGames():       return executeDBQuery( util_str(__query.getAll ,  __query.Games   .value[0]))               .fetchall()
 def getAllProfiles():    return executeDBQuery( util_str(__query.getAll ,  __query.Profiles.value[0]))               .fetchall()
 def getActiveProfile():  return executeDBQuery( util_str(__query.active ,  __query.Profiles.value[0]))               .fetchone()
-def enableProfile(Profile):     executeDBQuery( util_str(__query.enable , *__query.Profiles.value)       , [Profile])
+def enableProfile(Profile):     executeDBQuery( util_str(__query.enable , *__query.Profiles.value)      , [Profile])
 def disableProfiles():          executeDBQuery( util_str(__query.disable,  __query.Profiles.value[0]))
 
 def migrateData():
@@ -162,16 +186,16 @@ def swapProfiles(Profile, Headless = False):
     if Profile.lower() not in [p[0].lower() for p in getAllProfiles()]:
         Choice = input(util_str(__msg.profileMissing, Profile)).lower() == 'y'
         if     Choice: addProfile(Profile);
-        if not Choice: util_bugOut(__msg.abort)
+        if not Choice: util_bugOut(__msg.abort, Exit=True)
     if not Headless:
         Choice = input(util_str(__msg.promptSwap)).lower() == 'y'
-        if not Choice: util_bugOut(__msg.activeProfile, getActiveProfile()[0])
+        if not Choice: util_bugOut(__msg.activeProfile, getActiveProfile()[0], Exit=True)
     init_folders()
     disableProfiles()
     enableProfile(Profile)
     del_all_symlinks()
     add_all_symlinks()
-    if Headless: util_bugOut(__msg.activeProfile, getActiveProfile()[0])
+    if Headless: util_bugOut(__msg.activeProfile, getActiveProfile()[0], Exit=True)
 
 def add_new_game(ID,Dir,Comment = None):
     try: addGame(ID,Dir,Comment)
@@ -203,7 +227,6 @@ def parseArgs():
             if len(sys.argv) != 2: util_bugOut(__msg.missingArgs)
             profile = sys.argv[1]
             swapProfiles(profile)
-            pass
 
 def __main__():
     # Required libraries. Needs UAC for symlink.
@@ -214,7 +237,7 @@ def __main__():
     """
     initialize() # First-run setup
     parseArgs()
-    input(__msg.msgExit.value)
+    util_bugOut(__msg.msgExit, Exit = True)
 
 if __name__ == "__main__":
     # Idle IDE should autorun with *some* permissions. Will fail creating symlink.
